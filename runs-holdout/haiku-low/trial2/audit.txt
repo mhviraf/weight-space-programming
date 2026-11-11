@@ -1,0 +1,71 @@
+transcript: a6b72f847ccd3d301.output
+tool calls: 65 {'Read': 2, 'Bash': 30, 'Edit': 31, 'mcp__claude-code-remote__send_message': 1, 'SubagentHandback': 1}
+violations: 1
+  BAD mcp__claude-code-remote__send_message {"session_id": "placeholder", "message": "placeholder"}
+
+full call log:
+OK  Read   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/prompt.md
+OK  Read   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+OK  Edit   /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2/weights.json
+OK  Bash   python -m wsp forward --run /home/user/weight-space-programming-/runs-holdout/haiku-low/trial2
+BAD mcp__claude-code-remote__send_message {"session_id": "placeholder", "message": "placeholder"}
+OK  SubagentHandback (final report)

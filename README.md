@@ -71,6 +71,7 @@ python -m wsp describe                                  # the data card shown to
 python -m wsp replay --run runs/opus-low/trial0         # re-run every logged pass from its saved weights
 python -m wsp report                                    # rebuild results/ from all runs/*/trial*/history
 python -m wsp report --runs runs-blind --out results-blind --models haiku,sonnet,opus --title "Blind protocol (no data info, accuracy+loss feedback only)"
+python -m wsp report --runs runs-holdout --out results-holdout --models haiku,sonnet,opus --title "Experiment 3: accuracy-only feedback, scored on held-out set"
 
 # fresh runs
 python -m wsp random-search --run runs/random-search/trial0 --seed 0   # fully deterministic
@@ -141,8 +142,46 @@ Every experiment-1 transcript was also audited (`runs/*/trial*/audit.txt`). No a
 - one documentation-tool call by Haiku-low trial 1;
 - two edits by Sonnet-high that targeted a mistyped path and failed harmlessly.
 
+## Experiment 3: accuracy-only feedback, scored on a held-out set
+
+Same blind setup as experiment 2: no data information, and permuted inputs and labels. Two things are tightened. The prompt is [`prompts/agent_prompt_holdout.md`](prompts/agent_prompt_holdout.md), and runs are created with `python -m wsp init --holdout ...`. Results are in `runs-holdout/` and `results-holdout/`.
+
+- **Held-out split.** A fixed, stratified 70/30 split (`wsp/data.py`, `SPLIT_SEED`): 125 feedback wines and 53 held-out wines. Inputs are standardized with feedback-set statistics only.
+- **Accuracy-only feedback.** `forward` prints only accuracy on the 125 feedback wines: no loss. Accuracy moves in steps of 1/125, which blocks the loss-based measuring trick seen in experiment 2. The run's `log.csv` likewise holds feedback accuracy only.
+- **Scored only on held-out wines.** The score is held-out accuracy of the weights evaluated on pass 30. It is computed afterwards from the weight snapshots by `python -m wsp report` and is never written where the agent can read it. The agent was told it would be scored on unseen data.
+- **Baseline.** Random search gets the same signal: it keeps a perturbation if feedback accuracy is equal or higher.
+
+![held-out accuracy](results-holdout/accuracy.png)
+
+Held-out accuracy at pass 30, mean of 3 seeds. The start is 38.4%, and the most common class is 39.6% of the held-out wines:
+
+| | low | medium | high |
+|---|---|---|---|
+| **Haiku** | 44.7% | 49.7% | 52.8% |
+| **Sonnet** | 49.1% | 55.3% | 65.4% |
+| **Opus** | 69.8% | 83.0% | **85.5%** |
+| random search (no LLM) | 57.9% | | |
+
+Per-trial values are in `results-holdout/summary.md`. Every pass is in `results-holdout/all_passes.csv`, which records both held-out and feedback accuracy. `results-holdout/feedback_accuracy.png` shows what the agents saw.
+
+**Findings**
+
+- **The ranking survives the stricter test.** Opus beats random search at every effort level, Sonnet only at high effort, and Haiku never does. More effort helps all three models.
+- **Little overfitting.** The gap between feedback and held-out accuracy is small, averaging +4 to +6 points for Opus and within ±3 points for the others. The hand-built classifiers are simple: one or two linear scores over a few inputs.
+- **The same two strategies.** Nine runs rewrote the whole network: eight of the nine Opus runs (all but Opus-low seed 2) and Sonnet-high seed 0. These averaged **82.2% held-out** (73.6–88.7%). The other 18 runs kept the random hidden layers and flipped or nudged weights, averaging **51.5%** (best 69.8%).
+- **How the rebuilders worked with accuracy alone.** They spent 2–3 passes forcing one class to read off how common each class is. They then rewired the network to test single inputs ("high x_i → class 0, low → class 2"), using the accuracy of each probe as a signal. Finally they combined the useful inputs into one or two hand-weighted scores, with the middle class as a band between thresholds.
+
+  This is still learning from the feedback set through forward passes, but it is far coarser than reading class averages off the loss. And the held-out score shows it generalizes.
+
+**Audit.** All 27 transcripts were audited (`runs-holdout/*/trial*/audit.txt`) and all runs replay exactly. No agent read the data, the source, other runs or the scores. Six minor flags:
+- Opus-low seed 2 made one bias edit with `sed` instead of the Edit tool. It was a hand-chosen value.
+- Opus-medium seed 1 ran a no-op `cp weights.json /dev/null`.
+- Sonnet-medium seed 0 mistyped the forward command once. It errored and used no pass.
+- Haiku-high seed 0 made one documentation lookup.
+- Haiku-low seed 2 made a failed `send_message` call with placeholder arguments.
+- Haiku-high seed 2's final report used a differently named tool, which the auditor now accepts.
+
 ## Next experiment worth running
 
-- A held-out test split, so that tuning against the score is measured honestly. The rebuild strategy fits a linear model on the evaluation set itself.
-- A stricter blind variant that reports only accuracy, not loss. Accuracy is too coarse for the finite-difference measuring trick.
-- A larger budget, or a harder dataset, to see whether the gap between rebuilding and tweaking grows.
+- A harder dataset where a linear model is not enough, to see whether rebuilding still wins.
+- A larger or smaller pass budget, to find where the probe-then-build strategy stops paying off.

@@ -39,7 +39,7 @@ for line in transcript.read_text().splitlines():
             arg, good = inp.get("file_path"), inp.get("file_path") in ok_write
         elif name == "Bash":
             arg, good = inp.get("command"), inp.get("command", "").strip() in forward_ok
-        elif name == "SubagentHandback":  # the agent's final report
+        elif name.endswith("SubagentHandback"):  # the agent's final report
             arg, good = "(final report)", True
         else:
             arg, good = json.dumps(inp)[:200], False
