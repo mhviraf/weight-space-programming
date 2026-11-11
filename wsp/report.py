@@ -16,9 +16,9 @@ import numpy as np
 from . import data, model
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-EFFORTS = ["low", "high"]
+EFFORTS = ["low", "medium", "high"]
 # validated categorical slots (light mode) + neutral gray for the baseline
-COLORS = {"low": "#2a78d6", "high": "#eb6834", "random-search": "#8a8985"}
+COLORS = {"low": "#2a78d6", "medium": "#1baf7a", "high": "#eb6834", "random-search": "#8a8985"}
 
 
 def _flat(w):
@@ -98,8 +98,9 @@ def plot(rows, key, ylabel, path, MODELS, title, show_ref=True):
     axes[0].set_ylabel(ylabel)
     if key == "accuracy":
         axes[0].set_ylim(0, 1.02)
-    fig.suptitle(f"{title}: {ylabel} after every forward pass "
-                 "(thin = individual trials, x = run stopped early)", fontsize=11, x=0.01, ha="left")
+    import textwrap
+    full = f"{title}: {ylabel} after every forward pass (thin = individual trials, x = run stopped early)"
+    fig.suptitle(textwrap.fill(full, width=int(40 * len(MODELS) + 10)), fontsize=11, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)

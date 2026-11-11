@@ -70,6 +70,7 @@ pip install -r requirements.txt   # numpy, matplotlib (scikit-learn only for scr
 python -m wsp describe                                  # the data card shown to the agents
 python -m wsp replay --run runs/opus-low/trial0         # re-run every logged pass from its saved weights
 python -m wsp report                                    # rebuild results/ from all runs/*/trial*/history
+python -m wsp report --runs runs-blind --out results-blind --models haiku --title "Blind protocol (Haiku, no data info)"
 
 # fresh runs
 python -m wsp random-search --run runs/random-search/trial0 --seed 0   # fully deterministic
@@ -93,7 +94,39 @@ runs/<config>/trial<k>/  prompt.md, weights.json (final), log.csv, history/pass_
 results/                 all_passes.csv, summary.md, accuracy.png, loss.png
 ```
 
+## Experiment 2: blind protocol (no data leakage)
+
+This run removes everything the agent could use to reason about the data. The prompt is [`prompts/agent_prompt_blind.md`](prompts/agent_prompt_blind.md), and runs are created with `python -m wsp init --blind ...`. Results are in `runs-blind/` and `results-blind/`.
+
+- **No data information.** There is no dataset name, no feature names, no class meanings and no statistics. The agent sees only the architecture (13 → 10 → 10 → 3), its own `weights.json`, and each forward pass.
+- **Minimal feedback.** `forward` prints only accuracy and mean cross-entropy loss: no confusion matrix and no activation statistics. Activation stats are also left out of the run's own `log.csv`, which the agent could read.
+- **Permuted inputs and labels.** The input columns and class labels are shuffled with a fixed seed (`wsp/data.py`, `BLIND_SEED`). An agent that guesses "13 features, 3 classes = Wine" still can't map remembered facts onto the weights.
+- **Checked, not trusted.** `scripts/audit_transcript.py` scans the agent's full tool-call transcript and flags anything other than reading its prompt and weights, editing `weights.json`, and the exact forward command. It writes `RUN/audit.txt`.
+- **Baseline.** The random-search baseline is re-run on the same permuted data, from the same seeds.
+
+![blind accuracy](results-blind/accuracy.png)
+
+| config | trials | pass 0 acc | final acc | passes | audit |
+|---|---|---|---|---|---|
+| random-search (seeds 0, 1, 2) | 3 | 0.322 | 0.584 (0.506, 0.646, 0.601) | 30 | n/a |
+| haiku-medium (seed 0) | 1 | 0.292 | **0.360** | 30 | 0 violations |
+
+**Result.** With no data information, Haiku (medium effort) went from 29.2% to 36.0% in 30 passes. That is slightly above chance (the largest class is 39.9%) and below blind random search, which reached 50.6% from the same starting weights.
+
+Its strategy, from its own report:
+- Halved the output-layer weights. Loss fell from 2.51 to 1.63, since the random logits were overconfident.
+- Changed the output biases and the hidden1 biases one at a time, keeping whatever raised accuracy.
+
+So in this setting, hand-editing came out worse than blind random perturbation under the same budget.
+
+### Audit of experiment 1
+
+Every experiment-1 transcript was also audited (`runs/*/trial*/audit.txt`). No agent read the dataset, the source code or another run's files. The only flags are:
+- the slips listed above;
+- one documentation-tool call by Haiku-low trial 1;
+- two edits by Sonnet-high that targeted a mistyped path and failed harmlessly.
+
 ## Next experiment worth running
 
-Remove the class averages from the data card, so agents see feature names only. Also split off a held-out test set, so tuning against the score can't inflate the result.
-That would test actual reasoning about weights instead of copying a nearest-class-average classifier.
+More blind trials (seeds 1, 2) and other models or effort levels, to see whether any model beats blind random search when it has nothing but weights and a scalar score.
+Also a held-out test split, so that tuning against the score is measured honestly.
