@@ -9,6 +9,7 @@ Metrics are re-computed from the saved weight snapshots (not read from the logs)
 so this doubles as a reproducibility check.
 """
 import csv
+import json
 import pathlib
 
 import numpy as np
@@ -31,8 +32,10 @@ def collect(RUNS):
     for cfg_dir in sorted(p for p in RUNS.iterdir() if p.is_dir()):
         for trial_dir in sorted(cfg_dir.glob("trial*")):
             prev = None
-            blind = json.loads((trial_dir / "state.json").read_text()).get("blind", False)
-            X, y, _ = data.load(blind)
+            st = json.loads((trial_dir / "state.json").read_text())
+            Xf, yf, Xt, yt = data.for_state(st)
+            # holdout protocol: the scored metric is held-out accuracy; feedback accuracy kept separately
+            X, y = (Xt, yt) if Xt is not None else (Xf, yf)
             for snap in sorted((trial_dir / "history").glob("pass_*.json")):
                 w = model.load(snap)
                 m = model.evaluate(w, X, y)
@@ -41,7 +44,8 @@ def collect(RUNS):
                 prev = flat
                 rows.append({"config": cfg_dir.name, "trial": int(trial_dir.name[5:]),
                              "pass": int(snap.stem[5:]), "accuracy": m["accuracy"],
-                             "loss": m["loss"], "weights_changed": changed})
+                             "loss": m["loss"], "weights_changed": changed,
+                             "feedback_accuracy": model.evaluate(w, Xf, yf)["accuracy"]})
     return rows
 
 
@@ -96,7 +100,7 @@ def plot(rows, key, ylabel, path, MODELS, title, show_ref=True):
             ax.spines[s].set_visible(False)
         ax.legend(fontsize=7.5, frameon=False, loc="best")
     axes[0].set_ylabel(ylabel)
-    if key == "accuracy":
+    if key.endswith("accuracy"):
         axes[0].set_ylim(0, 1.02)
     import textwrap
     full = f"{title}: {ylabel} after every forward pass (thin = individual trials, x = run stopped early)"
@@ -114,7 +118,8 @@ def main(runs="runs", out="results", MODELS=("haiku", "sonnet", "opus"), title="
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         for r in rows:
-            w.writerow({**r, "accuracy": f"{r['accuracy']:.6f}", "loss": f"{r['loss']:.6f}"})
+            w.writerow({**r, "accuracy": f"{r['accuracy']:.6f}", "loss": f"{r['loss']:.6f}",
+                        "feedback_accuracy": f"{r['feedback_accuracy']:.6f}"})
     lines = ["| config | trials | pass 0 acc | final acc (mean) | best acc (mean) | final accs | passes used |",
              "|---|---|---|---|---|---|---|"]
     order = ["random-search"] + [f"{m}-{e}" for m in MODELS for e in EFFORTS]
@@ -140,6 +145,12 @@ def main(runs="runs", out="results", MODELS=("haiku", "sonnet", "opus"), title="
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     show_ref = runs == "runs"
-    plot(rows, "accuracy", "accuracy", OUT / "accuracy.png", MODELS, title, show_ref)
-    plot(rows, "loss", "cross-entropy loss", OUT / "loss.png", MODELS, title, show_ref)
-    print(f"wrote {OUT}/all_passes.csv, summary.md, accuracy.png, loss.png")
+    holdout = any(json.loads(p.read_text()).get("holdout") for p in RUNS.glob("*/trial*/state.json"))
+    label = "held-out accuracy" if holdout else "accuracy"
+    plot(rows, "accuracy", label, OUT / "accuracy.png", MODELS, title, show_ref)
+    plot(rows, "loss", "held-out cross-entropy loss" if holdout else "cross-entropy loss",
+         OUT / "loss.png", MODELS, title, show_ref)
+    if holdout:  # what the agents actually saw
+        plot(rows, "feedback_accuracy", "feedback-set accuracy (what agents saw)",
+             OUT / "feedback_accuracy.png", MODELS, title, False)
+    print(f"wrote {OUT}/all_passes.csv, summary.md and charts")

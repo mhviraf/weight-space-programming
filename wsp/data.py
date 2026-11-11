@@ -16,6 +16,48 @@ CLASS_NAMES = ["cultivar_0", "cultivar_1", "cultivar_2"]
 BLIND_SEED = 20261111
 
 
+SPLIT_SEED = 7
+TEST_FRACTION = 0.3
+
+
+def _raw():
+    raw = DATA.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != SHA256:
+        raise RuntimeError(f"data/wine.csv checksum mismatch: {digest}")
+    rows = list(csv.reader(raw.decode().splitlines()))
+    arr = np.array(rows[1:], dtype=float)
+    return arr[:, :-1], arr[:, -1].astype(int), rows[0][:-1]
+
+
+def load_holdout():
+    """Blind + held-out protocol (experiment 3).
+
+    Returns (X_feedback, y_feedback, X_test, y_test). Stratified 70/30 split with a
+    fixed seed; standardization uses feedback-set statistics only; feature columns
+    and class labels are permuted exactly as in the blind protocol."""
+    X, y, _ = _raw()
+    rng = np.random.default_rng(BLIND_SEED)
+    fperm, cperm = rng.permutation(X.shape[1]), rng.permutation(3)
+    X, y = X[:, fperm], cperm[y]
+    srng = np.random.default_rng(SPLIT_SEED)
+    test = np.zeros(len(y), dtype=bool)
+    for c in range(3):
+        idx = np.flatnonzero(y == c)
+        test[srng.choice(idx, size=round(TEST_FRACTION * len(idx)), replace=False)] = True
+    mu, sd = X[~test].mean(axis=0), X[~test].std(axis=0)
+    X = (X - mu) / sd
+    return X[~test], y[~test], X[test], y[test]
+
+
+def for_state(st):
+    """(X_feedback, y_feedback, X_test or None, y_test or None) for a run's state.json."""
+    if st.get("holdout"):
+        return load_holdout()
+    X, y, _ = load(st.get("blind", False))
+    return X, y, None, None
+
+
 def load(blind=False):
     """Return (X_standardized [178x13], y [178], feature_names).
 
