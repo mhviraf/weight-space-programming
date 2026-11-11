@@ -1,219 +1,198 @@
 # weight-space-programming
 
-A small, reproducible experiment: can an LLM improve a neural network **only by
-editing its weights by hand and running forward passes**, with no training?
+Can an LLM improve a small neural network **only by editing its weights by hand
+and running forward passes**, with no training, no gradients and no optimizer code?
 
-![accuracy per pass](results/accuracy.png)
+This repo runs that test on a tiny MLP and real data. It compares Claude Haiku 5.5,
+Sonnet 5.5 and Opus 5.5 at several effort levels against a no-LLM random-search
+baseline with the same budget. Everything except the LLM's own choices is
+deterministic and can be replayed.
 
-## Setup
+![cost vs held-out accuracy](results-holdout/cost_vs_accuracy.png)
+
+## TL;DR
+
+- **Setup.** An MLP `13 → 10 → 10 → 3` on the UCI Wine dataset starts from random weights. Each agent gets 30 forward passes. It may only read `weights.json`, edit it by hand, and run one forward-pass command.
+- **With no information about the data** (experiment 3: shuffled inputs and labels, accuracy-only feedback), the score is held-out accuracy on 53 wines the agent never sees:
+
+  | | low effort | medium effort | high effort | cost per run |
+  |---|---|---|---|---|
+  | **Opus 5.5** | 69.8% | 83.0% | **85.5%** | $1.07 – $1.49 |
+  | **Sonnet 5.5** | 49.1% | 55.3% | 65.4% | $0.57 – $0.61 |
+  | **Haiku 5.5** | 44.7% | 49.7% | 52.8% | $0.03 – $0.04 |
+  | random search (no LLM) | | 57.9% | | $0 |
+
+  These are means of 3 seeds. The start is 38.4%; always predicting the most common class gives 39.6%.
+- **What separates the winners is strategy, not effort per se.** Runs that only nudged the random weights did about as well as random search, or worse. All Haiku runs, most Sonnet runs and one Opus run did this. The runs that won treated forward passes as experiments, eight of the nine Opus runs and one Sonnet run among them:
+  1. Measure how common each class is.
+  2. Rewire the network to test one input at a time.
+  3. Hand-build a small linear classifier from the results.
+
+  These runs averaged **82% held-out**, against **52%** for the nudgers.
+- **Effort is cheap; model choice is not.** Going from low to high effort adds 8–40% to the cost and about 16 accuracy points for Sonnet and Opus. Opus costs about 40× more per run than Haiku.
+- **Leakage matters a lot.** When the prompt included per-class feature averages (experiment 1), every model reached 97–100% within 1–2 passes. A nearest-class-average classifier built from those numbers alone already gets 97.8%.
+- **The audits back up the results.** Every transcript was audited for rule-breaking tool calls (no agent read the data, the code or other runs). Every logged pass was re-computed from saved weight snapshots, and all of them match.
+
+## The setup (shared by all experiments)
 
 | | |
 |---|---|
-| Data | [UCI Wine](https://archive.ics.uci.edu/dataset/109/wine): 178 real wines, 13 chemical measurements, 3 cultivars. Committed as `data/wine.csv`, with its SHA-256 checked on every load. Features are z-score standardized. |
-| Model | MLP `13 → 10 ReLU → 10 ReLU → 3 softmax`: two hidden layers of 10 perceptrons each (283 parameters). Pure numpy. |
-| Baseline | Pass 0 of every run is He-normal random weights (seed = trial index, so trial *k* starts from the same weights for every model). |
-| Budget | 30 forward passes per run, enforced by the CLI. |
-| Metric | Accuracy and cross-entropy on the **entire** dataset after every pass. |
-| LLM arms | Haiku, Sonnet and Opus × effort `low` / `high` × 3 trials each = 18 runs. Each agent got the same prompt: [`prompts/agent_prompt.md`](prompts/agent_prompt.md), rendered per run as `runs/<config>/trial<k>/prompt.md`. |
-| Non-LLM arm | `random-search`: a (1+1) evolution strategy (Gaussian perturbation of all weights, kept if loss improves), with the same 30-pass budget. |
+| Data | [UCI Wine](https://archive.ics.uci.edu/dataset/109/wine): 178 real wines, 13 chemical measurements, 3 cultivars (classes of 59 / 71 / 48). Committed as `data/wine.csv`, with its SHA-256 checked on every load. Features are z-score standardized. |
+| Model | MLP `13 → 10 ReLU → 10 ReLU → 3 softmax`: two hidden layers of 10 perceptrons each, 283 parameters, pure numpy (`wsp/model.py`). Weights are stored as readable JSON, one neuron per row. |
+| Starting point | Pass 0 is He-normal random weights. Seed *k* gives the same starting weights for every model, effort level and baseline. |
+| Budget | 30 forward passes, enforced by the CLI (`python -m wsp forward --run DIR` refuses after 30). An invalid weights file does not use a pass. |
+| Agent loop | Read `weights.json` → edit it by hand (Edit/Write tools) → run the forward command → read the output → repeat. The rules allow no other command, no scripts, no gradient or search code, and no files outside the run folder. |
+| Agents | Claude Code subagents: Haiku 5.5, Sonnet 5.5 and Opus 5.5, with effort `low` / `medium` / `high` (experiment 1: `low` / `high`), 3 seeds each. |
+| Baseline | Random search, a (1+1) evolution strategy. Each pass adds Gaussian noise (σ = 0.1) to every weight and keeps the result if the feedback signal improves. Same budget, same feedback, same seeds; fully deterministic. |
 
-The agent loop: read `weights.json` → edit it by hand → `python -m wsp forward --run <dir>` → read the accuracy, loss, confusion matrix and dead-ReLU count → repeat.
-Agents were told this command is the only one they may run, with no scripts, gradients or optimizers, and that they may read only their own run folder.
+## The three experiments
 
-## Results
+Each experiment closes the loopholes the previous one exposed.
 
-`results/summary.md` (accuracy on all 178 samples; final = the last logged pass):
+| | 1: data card | 2: blind | 3: blind + held-out |
+|---|---|---|---|
+| What the prompt tells the agent about the data | Dataset name, feature names, **per-class feature averages** | Architecture only | Architecture only |
+| Inputs and labels | As in the dataset | Shuffled by a fixed permutation | Shuffled by a fixed permutation |
+| Feedback after each pass | Accuracy, loss, confusion matrix, dead ReLUs | Accuracy and loss | **Accuracy only**, on 125 feedback wines |
+| Scored on | All 178 wines | All 178 wines | **53 held-out wines**, never shown to the agent |
+| Prompt | [`agent_prompt.md`](prompts/agent_prompt.md) | [`agent_prompt_blind.md`](prompts/agent_prompt_blind.md) | [`agent_prompt_holdout.md`](prompts/agent_prompt_holdout.md) |
+| Runs / results | `runs/`, `results/` | `runs-blind/`, `results-blind/` | `runs-holdout/`, `results-holdout/` |
 
-| config | trials | pass 0 acc | final acc (mean) | best acc (mean) | final accs | passes used |
-|---|---|---|---|---|---|---|
-| random-search | 3 | 0.331 | 0.586 | 0.661 | 0.635, 0.669, 0.455 | 30, 30, 30 |
-| haiku-low | 3 | 0.331 | 0.983 | 0.983 | 0.983, 0.983, 0.983 | 30, 30, 30 |
-| haiku-high | 3 | 0.331 | 0.981 | 0.983 | 0.983, 0.978, 0.983 | 26, 25, 24 † |
-| sonnet-low | 3 | 0.331 | 0.987 | 0.987 | 0.989, 0.994, 0.978 | 30, 30, 30 |
-| sonnet-high | 3 | 0.331 | 0.985 | 0.987 | 0.983, 0.983, 0.989 | 30, 30, 30 |
-| opus-low | 3 | 0.331 | 0.991 | 0.991 | 1.000, 0.989, 0.983 | 30, 30, 30 |
-| opus-high | 3 | 0.331 | 0.985 | 0.991 | 0.989, 0.972, 0.994 | 8, 15, 30 † |
+The input and label shuffling exists because "13 features, 3 classes" might let a model guess the dataset and use what it remembers about it. The permutation (`wsp/data.py`, `BLIND_SEED`) makes such memories useless for setting weights.
 
-† These runs were stopped by the user before they used all 30 passes.
+### Experiment 3: blind, accuracy-only feedback, scored on held-out wines (main result)
 
-Data for any other chart is in `results/all_passes.csv`, with one row per (config, trial, pass) and a `weights_changed` column counting how many of the 283 parameters changed since the previous pass. Loss curves are in `results/loss.png`.
+![held-out accuracy per pass](results-holdout/accuracy.png)
 
-### How to read this (important caveat)
+**Setup**
+- The 178 wines are split 125 / 53 with a fixed, stratified split (`SPLIT_SEED`). Inputs are standardized with feedback-set statistics only.
+- Agents see only feedback-set accuracy, which moves in steps of 1/125.
+- The score is held-out accuracy of the weights evaluated on pass 30. It is computed afterwards from the saved weight snapshots and is never written anywhere the agent can read.
+- Results are in the TL;DR table. Per-trial numbers are in `results-holdout/summary.md`, and every pass is in `results-holdout/all_passes.csv`. `results-holdout/feedback_accuracy.png` shows what the agents saw.
 
-Every LLM run used the same trick: **ignore the random weights and write a classifier from scratch.**
-The data card in the prompt gives each class's average value for every feature. The agents copied those averages into 3 hidden1 neurons as one detector per cultivar, passed the scores through hidden2 unchanged, read them off at the output, and zeroed the remaining units.
-Predicting the nearest class average from the data card alone already scores **97.8%** (the dashed line in the chart).
-So the jump from about 33% to about 97% in 1–2 passes comes from the summary statistics in the prompt. It is not a search through weight space.
-The remaining 1–2 points come from hand-tuning against feedback on the same 178 samples. There is no held-out set, so treat that part as optimizing directly on the evaluation data.
-For comparison, the blind random search reaches about 59% under the same budget, and a trained logistic regression scores 100% on its own training data.
+**Findings**
+- **Little overfitting.** Feedback accuracy beats held-out accuracy by about 4 to 6 points for Opus, and by about 3 points or less for the others. The classifiers the agents built are simple: one or two weighted sums over a handful of inputs.
+- **The probe-then-build pattern is visible in the chart.** Opus's accuracy dips around passes 5–17, while it spends passes on measurements, then jumps once it writes the classifier.
 
-Differences between models and effort levels here are within one or two samples, too small to rank them.
+### Experiment 2: blind, accuracy + loss feedback
 
-## Protocol deviations (full disclosure)
+![blind accuracy per pass](results-blind/accuracy.png)
 
-- **Nudges.** Sonnet-low trials 0, 1, 2 and Haiku-low trial 2 stopped early, after 2–17 passes, at 96–98%. Each got one follow-up message: "the protocol asks you to use all 30 passes… keep going with the same rules." No other run got a nudge.
-- **Stopped runs.** Haiku-high (all 3 trials) and Opus-high trials 0–1 were stopped by the user, so their logs are shorter. The chart marks where each stopped with an ×.
-- **Rule slips the agents reported themselves.**
-  - Opus-low trial 2 ran one no-op shell command (`cd … && false`) and created an empty scratch file.
-  - Opus-low trial 1 also created a stray note file.
-  - Both files were deleted. Neither affected any pass.
-  - Haiku-low trial 1 made one documentation-tool call.
-- **Not re-evaluated.** Sonnet-high trial 0 reverted `weights.json` after its 30th pass without evaluating it again. The logged pass 30 (98.3%) is what counts.
-- **Self-reports only.** These checks rest on what the agents said they did. The CLI cannot stop a determined agent from running other code. The `weights_changed` column and the per-pass snapshots let you audit what each edit actually changed.
-- **Effort setting.** Effort was passed as the subagent effort setting. Whether every model honors it at every level was not verified.
+Accuracy on all 178 wines at pass 30, mean of 3 seeds. The start is 32.2%; always predicting the most common class gives 39.9%.
+
+| | low | medium | high |
+|---|---|---|---|
+| **Opus** | 74.3% | 84.1% | **86.0%** |
+| **Sonnet** | 51.3% | 57.9% | 68.4% |
+| **Haiku** | 45.9% | 43.1% | 54.5% |
+| random search | 58.4% | | |
+
+The ranking is the same as in experiment 3. Six runs rebuilt the network; they averaged 89.4%, against 55.2% for the 21 runs that nudged weights.
+
+The best run, Opus-high seed 0, reached **97.8% without seeing the data**, but it found a loophole. It sent one input at a time to the outputs at a tiny scale, so that the change in **loss** gave a weighted difference of that input's class averages. From those readings it rebuilt the class averages by hand and wrote a nearest-class-average classifier. That is effectively a hand-computed gradient. It broke no written rule, but it is why experiment 3 drops loss from the feedback.
+
+### Experiment 1: data card in the prompt (leaky)
+
+![experiment 1 accuracy per pass](results/accuracy.png)
+
+| | Haiku | Sonnet | Opus | random search |
+|---|---|---|---|---|
+| low effort | 98.3% | 98.7% | 99.1% | 58.6% |
+| high effort | 98.1% † | 98.5% | 98.5% † | |
+
+These are accuracies on all 178 wines at the last logged pass, means of 3 seeds. † marks configurations that include runs stopped early by the user, ending after 24–26 passes for Haiku and 8 or 15 passes for Opus.
+
+Every agent did the same thing: copy the per-class feature averages from the prompt into three "detector" neurons, pass them straight through, and zero the rest. That alone scores 97.8% (the dashed line); hand-tuning added the last 1–2 points. The experiment measures whether the agent spots the shortcut, not whether it can search weight space.
+
+## What the agents actually did
+
+Counting how many weights each run changed between pass 0 and pass 30 (in `results-*/summary.md`) splits the runs cleanly into two groups.
+
+**Nudgers** (in experiment 3: all Haiku runs, 7 of 9 Sonnet runs and 1 Opus run) left both hidden layers at their random values and edited the output layer and biases: halving, flipping signs, swapping rows, zeroing columns, one change per pass, keeping whatever helped. This is random search done by hand, and it performs like random search or worse.
+
+**Rebuilders** rewrote every hidden weight. They turned the network into an exact linear model by passing chosen inputs through `relu(x)` / `relu(−x)` pairs, with the second layer as a pass-through. Then they used forward passes as experiments:
+1. **Class frequencies (2–3 passes).** Zero the weights and set one class's output bias high; the accuracy is then that class's share.
+2. **Single-input probes (about 10–15 passes).** Route one input to the outputs ("high → class 0, low → class 2", the middle class as a band near zero). The accuracy shows which way the input points and how strongly.
+3. **Build and tune (the remaining passes).** Combine the useful inputs into one or two hand-weighted scores, then adjust the thresholds and biases.
+
+With accuracy-only feedback (experiment 3), 9 of 27 runs rebuilt the network: 8 Opus and 1 Sonnet-high. They averaged 82.2% held-out (73.6–88.7%). The 18 nudgers averaged 51.5%.
+
+This is still learning from the feedback data through the forward pass; there is no other way to learn anything. But every step was a hand-designed experiment with a stated hypothesis, not blind search.
+
+## Cost vs. performance
+
+Cost is the API cost of one 30-pass agent run, computed from the token usage in each transcript. Per-run token counts are committed in `results-*/usage.csv` (extracted with `scripts/extract_usage.py`). `python -m wsp cost` prices them and draws the chart at the top of this README.
+
+Pricing assumptions (`wsp/cost.py`):
+- First-party list prices as of November 2026, in USD per million tokens: Haiku 5.5 $0.10 in / $0.50 out, Sonnet 5.5 $2 / $10, Opus 5.5 $4 / $20.
+- Cache writes (all 5-minute) are billed at 1.25× the input price.
+- Cache reads are $0.20 for Opus and $0.10 for Sonnet. The Haiku cache-read price is assumed to be $0.01, the same 0.1× ratio.
+- Every request was served by the requested model, with no fallbacks. No Haiku prompt exceeded 100K tokens, so the standard Haiku rate applies.
+
+Most of the cost is re-reading the growing conversation on each pass, which effort barely changes. That is why raising effort is cheap here. Experiment 2's version of the chart is `results-blind/cost_vs_accuracy.png`.
+
+## Integrity checks
+
+- **Transcript audits.** `scripts/audit_transcript.py` checks every tool call against an allowlist: read the prompt and `weights.json`, edit `weights.json`, run the exact forward command. Results are in `*/trial*/audit.txt` for all 72 agent runs. **No agent read the dataset, the source code, other runs or the held-out scores.** The flags were all harmless slips:
+  - no-op shell commands (`cd … && true`, `cp weights.json /dev/null`, an empty `python -`);
+  - one bias edit made with `sed` instead of the Edit tool (a hand-chosen value);
+  - one forward pass whose output was discarded;
+  - edits to mistyped paths that failed;
+  - a few documentation lookups or failed message calls;
+  - stray empty files in experiment 1, since deleted.
+- **Replay.** Every pass's exact weights are saved in `history/pass_XXX.json`. `python -m wsp replay --run DIR` recomputes every logged number, and `report` recomputes all metrics from the snapshots rather than the logs. All runs in all three experiments replay exactly.
+- **Experiment 1 deviations.** Four early agents stopped after 2–17 passes and got one nudge to use the full budget. Five runs (Haiku-high ×3, Opus-high ×2) were stopped early by the user and are marked × in the chart. Experiments 2 and 3 had no nudges and no stopped runs; all 54 runs used exactly 30 passes.
+
+## Limitations
+
+- **Small sample.** There are 3 seeds per configuration, and one held-out wine is worth 1.9 points. Differences of a few points between neighbouring configurations are not meaningful; the gaps between models and between strategies are.
+- **Small, near-linear dataset.** Wine is close to linearly separable, which favours the build-a-linear-model strategy. A harder dataset might not.
+- **Effort setting.** Effort was passed as the subagent effort setting. Whether every model honours every level was not verified independently.
+- **Transcripts are not in the repo.** The audit results (`audit.txt`) and token counts (`usage.csv`) are committed, but re-running `audit_transcript.py` or `extract_usage.py` needs the original Claude Code transcripts.
+- **One prompt per experiment.** Different wording could change how often models discover the rebuild strategy.
 
 ## Reproduce
 
 ```bash
 pip install -r requirements.txt   # numpy, matplotlib (scikit-learn only for scripts/fetch_data.py)
 
-python -m wsp describe                                  # the data card shown to the agents
-python -m wsp replay --run runs/opus-low/trial0         # re-run every logged pass from its saved weights
-python -m wsp report                                    # rebuild results/ from all runs/*/trial*/history
-python -m wsp report --runs runs-blind --out results-blind --models haiku,sonnet,opus --title "Blind protocol (no data info, accuracy+loss feedback only)"
+# verify: recompute every logged pass from its saved weights
+python -m wsp replay --run runs-holdout/opus-high/trial0
+
+# rebuild all results, charts and cost plots from the committed runs
+python -m wsp report                                                    # experiment 1
+python -m wsp report --runs runs-blind   --out results-blind   --models haiku,sonnet,opus --title "Blind protocol (no data info, accuracy+loss feedback only)"
 python -m wsp report --runs runs-holdout --out results-holdout --models haiku,sonnet,opus --title "Experiment 3: accuracy-only feedback, scored on held-out set"
-python -m wsp cost --results results-holdout --title "Experiment 3: accuracy-only feedback, scored on held-out set"   # needs results-holdout/usage.csv
+python -m wsp cost --results results-blind   --title "Experiment 2: blind, accuracy + loss feedback"
+python -m wsp cost --results results-holdout --title "Experiment 3: accuracy-only feedback, scored on held-out set"
 
-# fresh runs
-python -m wsp random-search --run runs/random-search/trial0 --seed 0   # fully deterministic
-python -m wsp init --run runs/my-model/trial0 --seed 0 && python scripts/render_prompt.py runs/my-model/trial0
-#   ...give runs/my-model/trial0/prompt.md to any LLM agent...
+# new runs (experiment 3 protocol)
+python -m wsp random-search --holdout --run runs-holdout/random-search/trial0 --seed 0   # deterministic baseline
+python -m wsp init --holdout --run runs-new/my-model/trial0 --seed 0
+python scripts/render_prompt.py runs-new/my-model/trial0 prompts/agent_prompt_holdout.md
+#   ...then give runs-new/my-model/trial0/prompt.md to any LLM agent and let it run.
+#   Use --blind / prompts/agent_prompt_blind.md for experiment 2, or no flag for experiment 1.
 ```
-
-Everything except the LLM's choices is deterministic.
-Each pass's exact weights are saved in `runs/<config>/trial<k>/history/pass_XXX.json`. `replay` and `report` recompute every metric from those snapshots and do not trust the logs.
-All 21 runs replay with matching numbers.
 
 ## Layout
 
 ```
-data/wine.csv            dataset (exported once by scripts/fetch_data.py)
-wsp/model.py             MLP, init, forward pass, readable JSON format
-wsp/cli.py               init / forward (quota) / describe / random-search / replay / report
-wsp/report.py            aggregation + charts
-prompts/agent_prompt.md  the prompt template given to every LLM agent
-runs/<config>/trial<k>/  prompt.md, weights.json (final), log.csv, history/pass_XXX.json
-results/                 all_passes.csv, summary.md, accuracy.png, loss.png
+data/wine.csv                 dataset (exported once by scripts/fetch_data.py; checksum-verified)
+wsp/data.py                   loading, standardization, blind permutation, held-out split
+wsp/model.py                  MLP, random init, forward pass, readable JSON weights
+wsp/cli.py                    init / forward (quota) / describe / random-search / replay / report / cost
+wsp/report.py                 per-pass metrics from snapshots, summaries, accuracy/loss charts
+wsp/cost.py                   token pricing and cost-vs-accuracy chart
+prompts/                      the exact prompt templates given to the agents
+scripts/render_prompt.py      fills a template for one run (writes RUN/prompt.md)
+scripts/audit_transcript.py   checks an agent transcript against the tool allowlist (writes RUN/audit.txt)
+scripts/extract_usage.py      per-run token usage from transcripts (writes results-*/usage.csv)
+runs*/<config>/trial<k>/      prompt.md, weights.json, log.csv, state.json, audit.txt, history/pass_XXX.json
+results*/                     all_passes.csv, summary.md, accuracy.png, loss.png, cost.csv, cost_vs_accuracy.png
 ```
 
-## Experiment 2: blind protocol (no data leakage)
+## Next experiments worth running
 
-This run removes everything the agent could use to reason about the data. The prompt is [`prompts/agent_prompt_blind.md`](prompts/agent_prompt_blind.md), and runs are created with `python -m wsp init --blind ...`. Results are in `runs-blind/` and `results-blind/`.
-
-- **No data information.** There is no dataset name, no feature names, no class meanings and no statistics. The agent sees only the architecture (13 → 10 → 10 → 3), its own `weights.json`, and each forward pass.
-- **Minimal feedback.** `forward` prints only accuracy and mean cross-entropy loss: no confusion matrix and no activation statistics. Activation stats are also left out of the run's own `log.csv`, which the agent could read.
-- **Permuted inputs and labels.** The input columns and class labels are shuffled with a fixed seed (`wsp/data.py`, `BLIND_SEED`). An agent that guesses "13 features, 3 classes = Wine" still can't map remembered facts onto the weights.
-- **Checked, not trusted.** `scripts/audit_transcript.py` scans the agent's full tool-call transcript and flags anything other than reading its prompt and weights, editing `weights.json`, and the exact forward command. It writes `RUN/audit.txt`.
-- **Baseline.** The random-search baseline is re-run on the same permuted data, from the same seeds.
-
-![blind accuracy](results-blind/accuracy.png)
-
-All 27 runs (3 models × 3 effort levels × 3 seeds) used the full 30 passes. Accuracy is on all 178 samples, at the last logged pass, as a mean over the 3 seeds:
-
-| | low | medium | high |
-|---|---|---|---|
-| **Haiku** | 45.9% | 43.1% | 54.5% |
-| **Sonnet** | 51.3% | 57.9% | 68.4% |
-| **Opus** | 74.3% | 84.1% | **86.0%** |
-| random search (no LLM) | 58.4% | | |
-
-Every run started at a mean of 32.2% (seeds 0, 1, 2 give 29.2%, 41.6% and 25.8%). The most common class is 39.9%. The per-trial numbers are in `results-blind/summary.md`, and every pass is in `results-blind/all_passes.csv`.
-
-**Two strategies, and they explain almost all of the spread.** `results-blind/summary.md` counts how many weights each run changed between pass 0 and its last pass:
-
-- **Tweak the output layer (21 runs, mean 55.2%, range 36–74%).** These runs left the hidden layers random. They halved, flipped, reordered or zeroed output rows and columns, and nudged biases, one change per pass, keeping a change if it helped. This is a hand-run version of random search, and it does about as well: every Haiku run used this strategy, and none beat random search on average.
-- **Rebuild the network (6 runs, mean 89.4%, range 77–98%).** These runs rewrote every hidden weight, wiring the 10-10 network into an exact linear model by passing chosen inputs through relu(x) and relu(−x) pairs. Then they used forward passes as experiments:
-  - forcing one class to measure how common each class is;
-  - sending one input through at a time to see whether it pushes toward class 0 or class 2;
-  - discovering that one class sits "in the middle" of a direction.
-
-  The runs were Opus-low seed 0 (90.4%), Opus-medium seeds 0 and 1 (86.5%, 91.6%), Opus-high seeds 0 and 1 (97.8%, 93.3%), and Sonnet-high seed 0 (77.0%).
-
-**A caveat on the best run (Opus-high seed 0, 97.8%).** It never saw the data, but it used the loss as a measuring instrument. Its probe passes send one input straight to the logits at a tiny scale (0.1). At that scale the change in loss away from ln 3 is close to a weighted difference of that input's class averages. From those readings it worked out the class averages by hand and wrote a nearest-class-average classifier in pass 29, reaching the same 97.8% the leaky experiment 1 got from the data card. No written rule forbids this: it ran only the forward command and did no gradient code. But it is effectively a hand-computed gradient (a finite-difference probe) of the data statistics. The other rebuilders did something milder: they hill-climbed the weights of a linear model they had built, using the loss.
-
-**Audit.** All 27 transcripts were audited (`runs-blind/*/trial*/audit.txt`) and all 27 runs replay exactly from their weight snapshots. No agent read the data, the source, other runs or any other file. There were four harmless slips:
-- one edit to a mistyped path, which failed;
-- two no-op shell commands (`python - 2>/dev/null; true` and `cd <run> && true`);
-- one forward pass whose output the agent piped to `head -0`, wasting that pass on unchanged weights.
-
-### Audit of experiment 1
-
-Every experiment-1 transcript was also audited (`runs/*/trial*/audit.txt`). No agent read the dataset, the source code or another run's files. The only flags are:
-- the slips listed above;
-- one documentation-tool call by Haiku-low trial 1;
-- two edits by Sonnet-high that targeted a mistyped path and failed harmlessly.
-
-## Experiment 3: accuracy-only feedback, scored on a held-out set
-
-Same blind setup as experiment 2: no data information, and permuted inputs and labels. Two things are tightened. The prompt is [`prompts/agent_prompt_holdout.md`](prompts/agent_prompt_holdout.md), and runs are created with `python -m wsp init --holdout ...`. Results are in `runs-holdout/` and `results-holdout/`.
-
-- **Held-out split.** A fixed, stratified 70/30 split (`wsp/data.py`, `SPLIT_SEED`): 125 feedback wines and 53 held-out wines. Inputs are standardized with feedback-set statistics only.
-- **Accuracy-only feedback.** `forward` prints only accuracy on the 125 feedback wines: no loss. Accuracy moves in steps of 1/125, which blocks the loss-based measuring trick seen in experiment 2. The run's `log.csv` likewise holds feedback accuracy only.
-- **Scored only on held-out wines.** The score is held-out accuracy of the weights evaluated on pass 30. It is computed afterwards from the weight snapshots by `python -m wsp report` and is never written where the agent can read it. The agent was told it would be scored on unseen data.
-- **Baseline.** Random search gets the same signal: it keeps a perturbation if feedback accuracy is equal or higher.
-
-![held-out accuracy](results-holdout/accuracy.png)
-
-Held-out accuracy at pass 30, mean of 3 seeds. The start is 38.4%, and the most common class is 39.6% of the held-out wines:
-
-| | low | medium | high |
-|---|---|---|---|
-| **Haiku** | 44.7% | 49.7% | 52.8% |
-| **Sonnet** | 49.1% | 55.3% | 65.4% |
-| **Opus** | 69.8% | 83.0% | **85.5%** |
-| random search (no LLM) | 57.9% | | |
-
-Per-trial values are in `results-holdout/summary.md`. Every pass is in `results-holdout/all_passes.csv`, which records both held-out and feedback accuracy. `results-holdout/feedback_accuracy.png` shows what the agents saw.
-
-**Findings**
-
-- **The ranking survives the stricter test.** Opus beats random search at every effort level, Sonnet only at high effort, and Haiku never does. More effort helps all three models.
-- **Little overfitting.** The gap between feedback and held-out accuracy is small, averaging +4 to +6 points for Opus and within ±3 points for the others. The hand-built classifiers are simple: one or two linear scores over a few inputs.
-- **The same two strategies.** Nine runs rewrote the whole network: eight of the nine Opus runs (all but Opus-low seed 2) and Sonnet-high seed 0. These averaged **82.2% held-out** (73.6–88.7%). The other 18 runs kept the random hidden layers and flipped or nudged weights, averaging **51.5%** (best 69.8%).
-- **How the rebuilders worked with accuracy alone.** They spent 2–3 passes forcing one class to read off how common each class is. They then rewired the network to test single inputs ("high x_i → class 0, low → class 2"), using the accuracy of each probe as a signal. Finally they combined the useful inputs into one or two hand-weighted scores, with the middle class as a band between thresholds.
-
-  This is still learning from the feedback set through forward passes, but it is far coarser than reading class averages off the loss. And the held-out score shows it generalizes.
-
-**Audit.** All 27 transcripts were audited (`runs-holdout/*/trial*/audit.txt`) and all runs replay exactly. No agent read the data, the source, other runs or the scores. Six minor flags:
-- Opus-low seed 2 made one bias edit with `sed` instead of the Edit tool. It was a hand-chosen value.
-- Opus-medium seed 1 ran a no-op `cp weights.json /dev/null`.
-- Sonnet-medium seed 0 mistyped the forward command once. It errored and used no pass.
-- Haiku-high seed 0 made one documentation lookup.
-- Haiku-low seed 2 made a failed `send_message` call with placeholder arguments.
-- Haiku-high seed 2's final report used a differently named tool, which the auditor now accepts.
-
-## Cost vs. performance
-
-![cost vs held-out accuracy](results-holdout/cost_vs_accuracy.png)
-
-Cost is the API cost of one 30-pass agent run, computed from the token usage in each agent's transcript.
-- Token counts per run are in `results-*/usage.csv`, extracted with `scripts/extract_usage.py`.
-- Pricing uses `python -m wsp cost --results results-holdout`; prices are in `wsp/cost.py`.
-
-Pricing assumptions:
-- First-party list prices as of November 2026, in USD per million tokens: Haiku 5.5 $0.10 in / $0.50 out, Sonnet 5.5 $2 / $10, Opus 5.5 $4 / $20.
-- Cache writes are billed at 1.25× the input price.
-- Cache reads are $0.20 for Opus and $0.10 for Sonnet. The Haiku cache-read price is assumed to be $0.01, the same 0.1× ratio.
-- Most input tokens are cache reads, because each pass re-sends the conversation.
-- Every request was served by the requested model (no fallbacks), and no Haiku prompt exceeded 100K tokens.
-
-Experiment 3, mean of 3 seeds:
-
-| model | effort | cost per run | held-out accuracy |
-|---|---|---|---|
-| Haiku | low / medium / high | $0.031 / $0.033 / $0.039 | 44.7% / 49.7% / 52.8% |
-| Sonnet | low / medium / high | $0.57 / $0.58 / $0.61 | 49.1% / 55.3% / 65.4% |
-| Opus | low / medium / high | $1.07 / $1.25 / $1.49 | 69.8% / 83.0% / 85.5% |
-| random search | n/a | $0 | 57.9% |
-
-**Reading it:**
-- **Effort is cheap; the model choice is not.** Going from low to high effort costs about +8% for Sonnet and +40% for Opus. It buys 16 points of accuracy for Sonnet and 16 for Opus. Most of the cost is re-reading the conversation, which effort barely changes.
-- **Haiku costs about 1/40 of Opus,** but no Haiku setting beats free random search.
-- **Sonnet beats random search only at high effort.** Opus at medium effort, about $1.25 per run, gives most of the attainable accuracy.
-
-Experiment 2 has the same plot: `results-blind/cost_vs_accuracy.png`.
-
-## Next experiment worth running
-
-- A harder dataset where a linear model is not enough, to see whether rebuilding still wins.
-- A larger or smaller pass budget, to find where the probe-then-build strategy stops paying off.
+- A harder dataset, where a linear model is not enough, to see whether rebuilding still wins.
+- Smaller and larger pass budgets, to find where the probe-then-build strategy stops paying off.
+- A prompt variant that hints at the probe strategy, to see whether Haiku and Sonnet can carry it out when told.
