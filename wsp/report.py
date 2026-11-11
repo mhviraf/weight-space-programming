@@ -16,8 +16,6 @@ import numpy as np
 from . import data, model
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-RUNS, OUT = ROOT / "runs", ROOT / "results"
-MODELS = ["haiku", "sonnet", "opus"]
 EFFORTS = ["low", "high"]
 # validated categorical slots (light mode) + neutral gray for the baseline
 COLORS = {"low": "#2a78d6", "high": "#eb6834", "random-search": "#8a8985"}
@@ -27,12 +25,14 @@ def _flat(w):
     return np.concatenate([np.ravel(w[l][k]) for l in model.LAYERS for k in ("W", "b")])
 
 
-def collect():
-    X, y, _ = data.load()
+def collect(RUNS):
+    import json
     rows = []
     for cfg_dir in sorted(p for p in RUNS.iterdir() if p.is_dir()):
         for trial_dir in sorted(cfg_dir.glob("trial*")):
             prev = None
+            blind = json.loads((trial_dir / "state.json").read_text()).get("blind", False)
+            X, y, _ = data.load(blind)
             for snap in sorted((trial_dir / "history").glob("pass_*.json")):
                 w = model.load(snap)
                 m = model.evaluate(w, X, y)
@@ -61,12 +61,13 @@ def centroid_accuracy():
     return float((((X[:, None, :] - M) ** 2).sum(-1).argmin(1) == y).mean())
 
 
-def plot(rows, key, ylabel, path):
+def plot(rows, key, ylabel, path, MODELS, title, show_ref=True):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4.2), sharey=True, dpi=150)
+    fig, axes = plt.subplots(1, len(MODELS), figsize=(4.4 * len(MODELS) + 0.4, 4.2), sharey=True, dpi=150, squeeze=False)
+    axes = axes[0]
     for ax, mname in zip(axes, MODELS):
         series = [("random-search", "random search (1+1 ES)")] + \
                  [(f"{mname}-{e}", f"{mname} · {e} effort") for e in EFFORTS]
@@ -83,7 +84,7 @@ def plot(rows, key, ylabel, path):
             padded = np.array([c + [np.nan] * (n - len(c)) for c in cs])
             mean = np.nanmean(padded, axis=0)  # mean over the trials that reached that pass
             ax.plot(range(n), mean, color=color, lw=2, label=f"{label} (mean of {len(cs)})")
-        if key == "accuracy":
+        if key == "accuracy" and show_ref:
             ref = centroid_accuracy()
             ax.axhline(ref, color="#52514e", lw=0.8, ls="--")
             ax.text(30, ref - 0.035, f"nearest class mean from data card: {ref:.1%}",
@@ -97,16 +98,17 @@ def plot(rows, key, ylabel, path):
     axes[0].set_ylabel(ylabel)
     if key == "accuracy":
         axes[0].set_ylim(0, 1.02)
-    fig.suptitle(f"Hand-edited MLP on UCI Wine: {ylabel} after every forward pass "
+    fig.suptitle(f"{title}: {ylabel} after every forward pass "
                  "(thin = individual trials, x = run stopped early)", fontsize=11, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
 
 
-def main():
+def main(runs="runs", out="results", MODELS=("haiku", "sonnet", "opus"), title="Hand-edited MLP on UCI Wine"):
+    RUNS, OUT = ROOT / runs, ROOT / out
     OUT.mkdir(exist_ok=True)
-    rows = collect()
+    rows = collect(RUNS)
     with (OUT / "all_passes.csv").open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
@@ -125,6 +127,7 @@ def main():
                      f"{', '.join(str(len(c) - 1) for c in acc)} |")
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
-    plot(rows, "accuracy", "accuracy", OUT / "accuracy.png")
-    plot(rows, "loss", "cross-entropy loss", OUT / "loss.png")
+    show_ref = runs == "runs"
+    plot(rows, "accuracy", "accuracy", OUT / "accuracy.png", MODELS, title, show_ref)
+    plot(rows, "loss", "cross-entropy loss", OUT / "loss.png", MODELS, title, show_ref)
     print(f"wrote {OUT}/all_passes.csv, summary.md, accuracy.png, loss.png")

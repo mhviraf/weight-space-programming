@@ -28,8 +28,14 @@ def _paths(run):
     return run, run / "weights.json", run / "log.csv", run / "history", run / "state.json"
 
 
+def _blind(run):
+    return json.loads(_paths(run)[4].read_text()).get("blind", False)
+
+
 def _record(run, w_text, metrics, step):
     run, _, log, hist, state = _paths(run)
+    if _blind(run):  # do not leave activation statistics where the agent can read them
+        metrics = {**metrics, "dead_units": ["", ""]}
     (hist / f"pass_{step:03d}.json").write_text(w_text)
     with log.open("a", newline="") as f:
         csv.writer(f).writerow([step, f"{metrics['accuracy']:.6f}", f"{metrics['loss']:.6f}",
@@ -40,10 +46,12 @@ def _record(run, w_text, metrics, step):
     state.write_text(json.dumps(st, indent=2) + "\n")
 
 
-def _print(metrics, step):
+def _print(metrics, step, blind=False):
     used = step
     print(f"pass {step}/{QUOTA}  (remaining: {QUOTA - used})")
     print(f"accuracy: {metrics['accuracy']:.4f}   cross-entropy loss: {metrics['loss']:.4f}")
+    if blind:  # blind protocol: no per-class or activation information
+        return
     print("confusion matrix (rows = true class, cols = predicted):")
     for i, row in enumerate(metrics["confusion"]):
         print(f"  true {i}: " + "  ".join(f"{v:4d}" for v in row))
@@ -56,16 +64,18 @@ def cmd_init(a):
     if run.exists() and any(run.iterdir()):
         sys.exit(f"{run} already exists; refusing to overwrite")
     hist.mkdir(parents=True)
-    X, y, _ = data.load()
+    blind = getattr(a, "blind", False)
+    X, y, _ = data.load(blind)
     w = model.init_weights(a.seed)
     text = model.dumps(w)
     wpath.write_text(text)
-    state.write_text(json.dumps({"seed": a.seed, "quota": QUOTA, "passes_used": 0}, indent=2) + "\n")
+    state.write_text(json.dumps({"seed": a.seed, "quota": QUOTA, "passes_used": 0, "blind": blind},
+                                indent=2) + "\n")
     log.write_text(",".join(LOG_FIELDS) + "\n")
     m = model.evaluate(w, X, y)
     _record(run, text, m, 0)
     print(f"initialized {run} with seed {a.seed}; pass 0 is the random-weight baseline")
-    _print(m, 0)
+    _print(m, 0, blind)
 
 
 def cmd_forward(a):
@@ -79,11 +89,11 @@ def cmd_forward(a):
         model.validate(w)
     except (ValueError, KeyError, TypeError) as e:
         sys.exit(f"invalid weights.json (no pass consumed): {e}")
-    X, y, _ = data.load()
+    X, y, _ = data.load(st.get("blind", False))
     m = model.evaluate(w, X, y)
     step = st["passes_used"] + 1
     _record(run, text, m, step)
-    _print(m, step)
+    _print(m, step, st.get("blind", False))
 
 
 def cmd_describe(a):
@@ -100,10 +110,10 @@ def cmd_describe(a):
 def cmd_random_search(a):
     """Non-LLM baseline under the same budget: perturb all weights with Gaussian
     noise, keep the change if loss improves (1+1 evolution strategy)."""
-    cmd_init(argparse.Namespace(run=a.run, seed=a.seed))
+    cmd_init(argparse.Namespace(run=a.run, seed=a.seed, blind=True))
     run, wpath, *_ = _paths(a.run)
     rng = np.random.default_rng(10_000 + a.seed)
-    X, y, _ = data.load()
+    X, y, _ = data.load(blind=True)
     best = model.load(wpath)
     best_loss = model.evaluate(best, X, y)["loss"]
     for step in range(1, QUOTA + 1):
@@ -121,7 +131,7 @@ def cmd_random_search(a):
 
 def cmd_replay(a):
     run, _, log, hist, _ = _paths(a.run)
-    X, y, _ = data.load()
+    X, y, _ = data.load(_blind(run))
     rows = list(csv.DictReader(log.open()))
     bad = 0
     for r in rows:
@@ -135,13 +145,14 @@ def cmd_replay(a):
 
 def cmd_report(a):
     from . import report
-    report.main()
+    report.main(a.runs, a.out, a.models.split(","), a.title)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="wsp")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("init"); s.add_argument("--run", required=True); s.add_argument("--seed", type=int, required=True)
+    s.add_argument("--blind", action="store_true", help="forward prints only accuracy and loss")
     s.set_defaults(f=cmd_init)
     s = sub.add_parser("forward"); s.add_argument("--run", required=True); s.set_defaults(f=cmd_forward)
     s = sub.add_parser("describe"); s.set_defaults(f=cmd_describe)
@@ -149,6 +160,9 @@ def main(argv=None):
     s.add_argument("--seed", type=int, required=True); s.add_argument("--sigma", type=float, default=0.1)
     s.set_defaults(f=cmd_random_search)
     s = sub.add_parser("replay"); s.add_argument("--run", required=True); s.set_defaults(f=cmd_replay)
-    s = sub.add_parser("report"); s.set_defaults(f=cmd_report)
+    s = sub.add_parser("report"); s.add_argument("--runs", default="runs"); s.add_argument("--out", default="results")
+    s.add_argument("--models", default="haiku,sonnet,opus")
+    s.add_argument("--title", default="Hand-edited MLP on UCI Wine")
+    s.set_defaults(f=cmd_report)
     a = p.parse_args(argv)
     a.f(a)
