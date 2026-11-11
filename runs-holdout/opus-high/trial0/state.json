@@ -1,7 +1,7 @@
 {
   "seed": 0,
   "quota": 30,
-  "passes_used": 1,
+  "passes_used": 5,
   "blind": true,
   "holdout": true
 }
