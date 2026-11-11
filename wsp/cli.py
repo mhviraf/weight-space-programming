@@ -165,6 +165,11 @@ def cmd_report(a):
     report.main(a.runs, a.out, a.models.split(","), a.title)
 
 
+def cmd_cost(a):
+    from . import cost
+    cost.main(a.results, a.title)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="wsp")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -184,5 +189,8 @@ def main(argv=None):
     s.add_argument("--models", default="haiku,sonnet,opus")
     s.add_argument("--title", default="Hand-edited MLP on UCI Wine")
     s.set_defaults(f=cmd_report)
+    s = sub.add_parser("cost"); s.add_argument("--results", required=True)
+    s.add_argument("--title", default="")
+    s.set_defaults(f=cmd_cost)
     a = p.parse_args(argv)
     a.f(a)

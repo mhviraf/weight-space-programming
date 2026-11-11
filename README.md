@@ -72,6 +72,7 @@ python -m wsp replay --run runs/opus-low/trial0         # re-run every logged pa
 python -m wsp report                                    # rebuild results/ from all runs/*/trial*/history
 python -m wsp report --runs runs-blind --out results-blind --models haiku,sonnet,opus --title "Blind protocol (no data info, accuracy+loss feedback only)"
 python -m wsp report --runs runs-holdout --out results-holdout --models haiku,sonnet,opus --title "Experiment 3: accuracy-only feedback, scored on held-out set"
+python -m wsp cost --results results-holdout --title "Experiment 3: accuracy-only feedback, scored on held-out set"   # needs results-holdout/usage.csv
 
 # fresh runs
 python -m wsp random-search --run runs/random-search/trial0 --seed 0   # fully deterministic
@@ -180,6 +181,37 @@ Per-trial values are in `results-holdout/summary.md`. Every pass is in `results-
 - Haiku-high seed 0 made one documentation lookup.
 - Haiku-low seed 2 made a failed `send_message` call with placeholder arguments.
 - Haiku-high seed 2's final report used a differently named tool, which the auditor now accepts.
+
+## Cost vs. performance
+
+![cost vs held-out accuracy](results-holdout/cost_vs_accuracy.png)
+
+Cost is the API cost of one 30-pass agent run, computed from the token usage in each agent's transcript.
+- Token counts per run are in `results-*/usage.csv`, extracted with `scripts/extract_usage.py`.
+- Pricing uses `python -m wsp cost --results results-holdout`; prices are in `wsp/cost.py`.
+
+Pricing assumptions:
+- First-party list prices as of November 2026, in USD per million tokens: Haiku 5.5 $0.10 in / $0.50 out, Sonnet 5.5 $2 / $10, Opus 5.5 $4 / $20.
+- Cache writes are billed at 1.25× the input price.
+- Cache reads are $0.20 for Opus and $0.10 for Sonnet. The Haiku cache-read price is assumed to be $0.01, the same 0.1× ratio.
+- Most input tokens are cache reads, because each pass re-sends the conversation.
+- Every request was served by the requested model (no fallbacks), and no Haiku prompt exceeded 100K tokens.
+
+Experiment 3, mean of 3 seeds:
+
+| model | effort | cost per run | held-out accuracy |
+|---|---|---|---|
+| Haiku | low / medium / high | $0.031 / $0.033 / $0.039 | 44.7% / 49.7% / 52.8% |
+| Sonnet | low / medium / high | $0.57 / $0.58 / $0.61 | 49.1% / 55.3% / 65.4% |
+| Opus | low / medium / high | $1.07 / $1.25 / $1.49 | 69.8% / 83.0% / 85.5% |
+| random search | n/a | $0 | 57.9% |
+
+**Reading it:**
+- **Effort is cheap; the model choice is not.** Going from low to high effort costs about +8% for Sonnet and +40% for Opus. It buys 16 points of accuracy for Sonnet and 16 for Opus. Most of the cost is re-reading the conversation, which effort barely changes.
+- **Haiku costs about 1/40 of Opus,** but no Haiku setting beats free random search.
+- **Sonnet beats random search only at high effort.** Opus at medium effort, about $1.25 per run, gives most of the attainable accuracy.
+
+Experiment 2 has the same plot: `results-blind/cost_vs_accuracy.png`.
 
 ## Next experiment worth running
 
