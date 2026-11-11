@@ -54,6 +54,13 @@ def curves(rows, cfg, key):
     return out
 
 
+def centroid_accuracy():
+    """Accuracy of 'predict the nearest class mean' using only the data-card means."""
+    X, y, _ = data.load()
+    M = np.stack([X[y == c].mean(0) for c in range(3)])
+    return float((((X[:, None, :] - M) ** 2).sum(-1).argmin(1) == y).mean())
+
+
 def plot(rows, key, ylabel, path):
     import matplotlib
     matplotlib.use("Agg")
@@ -68,11 +75,19 @@ def plot(rows, key, ylabel, path):
             if not cs:
                 continue
             color = COLORS["random-search" if cfg == "random-search" else cfg.split("-")[1]]
-            n = min(len(c) for c in cs)
+            n = max(len(c) for c in cs)
             for c in cs:
                 ax.plot(range(len(c)), c, color=color, lw=0.8, alpha=0.3)
-            mean = np.mean([c[:n] for c in cs], axis=0)
+                if len(c) < n:  # run stopped before using its full quota
+                    ax.plot(len(c) - 1, c[-1], "x", color=color, ms=6)
+            padded = np.array([c + [np.nan] * (n - len(c)) for c in cs])
+            mean = np.nanmean(padded, axis=0)  # mean over the trials that reached that pass
             ax.plot(range(n), mean, color=color, lw=2, label=f"{label} (mean of {len(cs)})")
+        if key == "accuracy":
+            ref = centroid_accuracy()
+            ax.axhline(ref, color="#52514e", lw=0.8, ls="--")
+            ax.text(30, ref - 0.035, f"nearest class mean from data card: {ref:.1%}",
+                    ha="right", fontsize=7, color="#52514e")
         ax.set_title(mname.capitalize(), fontsize=11, loc="left")
         ax.set_xlabel("forward pass (0 = random weights)")
         ax.grid(axis="y", color="#e4e3df", lw=0.6)
@@ -83,7 +98,7 @@ def plot(rows, key, ylabel, path):
     if key == "accuracy":
         axes[0].set_ylim(0, 1.02)
     fig.suptitle(f"Hand-edited MLP on UCI Wine: {ylabel} after every forward pass "
-                 "(thin = individual trials)", fontsize=11, x=0.01, ha="left")
+                 "(thin = individual trials, x = run stopped early)", fontsize=11, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
