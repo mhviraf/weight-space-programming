@@ -126,6 +126,17 @@ def main(runs="runs", out="results", MODELS=("haiku", "sonnet", "opus"), title="
                      f"{np.mean([c[-1] for c in acc]):.3f} | {np.mean([max(c) for c in acc]):.3f} | "
                      f"{', '.join(f'{c[-1]:.3f}' for c in acc)} | "
                      f"{', '.join(str(len(c) - 1) for c in acc)} |")
+    # Strategy proxy: how much of the hidden layers did each run rewrite (pass 0 -> last pass)?
+    lines += ["", "| run | final acc | hidden1 weights changed | hidden2 weights changed | output weights changed |",
+              "|---|---|---|---|---|"]
+    for cfg_dir in sorted(p for p in RUNS.iterdir() if p.is_dir() and p.name != "random-search"):
+        for trial_dir in sorted(cfg_dir.glob("trial*")):
+            snaps = sorted((trial_dir / "history").glob("pass_*.json"))
+            a, b = model.load(snaps[0]), model.load(snaps[-1])
+            ch = {l: int((np.asarray(a[l]["W"]) != np.asarray(b[l]["W"])).sum()) for l in model.LAYERS}
+            acc = curves(rows, cfg_dir.name, "accuracy")[int(trial_dir.name[5:])][-1]
+            lines.append(f"| {cfg_dir.name}/{trial_dir.name} | {acc:.3f} | {ch['hidden1']}/130 | "
+                         f"{ch['hidden2']}/100 | {ch['output']}/30 |")
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     show_ref = runs == "runs"

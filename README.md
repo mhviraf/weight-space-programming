@@ -70,7 +70,7 @@ pip install -r requirements.txt   # numpy, matplotlib (scikit-learn only for scr
 python -m wsp describe                                  # the data card shown to the agents
 python -m wsp replay --run runs/opus-low/trial0         # re-run every logged pass from its saved weights
 python -m wsp report                                    # rebuild results/ from all runs/*/trial*/history
-python -m wsp report --runs runs-blind --out results-blind --models haiku --title "Blind protocol (Haiku, no data info)"
+python -m wsp report --runs runs-blind --out results-blind --models haiku,sonnet,opus --title "Blind protocol (no data info, accuracy+loss feedback only)"
 
 # fresh runs
 python -m wsp random-search --run runs/random-search/trial0 --seed 0   # fully deterministic
@@ -106,18 +106,33 @@ This run removes everything the agent could use to reason about the data. The pr
 
 ![blind accuracy](results-blind/accuracy.png)
 
-| config | trials | pass 0 acc | final acc | passes | audit |
-|---|---|---|---|---|---|
-| random-search (seeds 0, 1, 2) | 3 | 0.322 | 0.584 (0.506, 0.646, 0.601) | 30 | n/a |
-| haiku-medium (seed 0) | 1 | 0.292 | **0.360** | 30 | 0 violations |
+All 27 runs (3 models × 3 effort levels × 3 seeds) used the full 30 passes. Accuracy is on all 178 samples, at the last logged pass, as a mean over the 3 seeds:
 
-**Result.** With no data information, Haiku (medium effort) went from 29.2% to 36.0% in 30 passes. That is slightly above chance (the largest class is 39.9%) and below blind random search, which reached 50.6% from the same starting weights.
+| | low | medium | high |
+|---|---|---|---|
+| **Haiku** | 45.9% | 43.1% | 54.5% |
+| **Sonnet** | 51.3% | 57.9% | 68.4% |
+| **Opus** | 74.3% | 84.1% | **86.0%** |
+| random search (no LLM) | 58.4% | | |
 
-Its strategy, from its own report:
-- Halved the output-layer weights. Loss fell from 2.51 to 1.63, since the random logits were overconfident.
-- Changed the output biases and the hidden1 biases one at a time, keeping whatever raised accuracy.
+Every run started at a mean of 32.2% (seeds 0, 1, 2 give 29.2%, 41.6% and 25.8%). The most common class is 39.9%. The per-trial numbers are in `results-blind/summary.md`, and every pass is in `results-blind/all_passes.csv`.
 
-So in this setting, hand-editing came out worse than blind random perturbation under the same budget.
+**Two strategies, and they explain almost all of the spread.** `results-blind/summary.md` counts how many weights each run changed between pass 0 and its last pass:
+
+- **Tweak the output layer (21 runs, mean 55.2%, range 36–74%).** These runs left the hidden layers random. They halved, flipped, reordered or zeroed output rows and columns, and nudged biases, one change per pass, keeping a change if it helped. This is a hand-run version of random search, and it does about as well: every Haiku run used this strategy, and none beat random search on average.
+- **Rebuild the network (6 runs, mean 89.4%, range 77–98%).** These runs rewrote every hidden weight, wiring the 10-10 network into an exact linear model by passing chosen inputs through relu(x) and relu(−x) pairs. Then they used forward passes as experiments:
+  - forcing one class to measure how common each class is;
+  - sending one input through at a time to see whether it pushes toward class 0 or class 2;
+  - discovering that one class sits "in the middle" of a direction.
+
+  The runs were Opus-low seed 0 (90.4%), Opus-medium seeds 0 and 1 (86.5%, 91.6%), Opus-high seeds 0 and 1 (97.8%, 93.3%), and Sonnet-high seed 0 (77.0%).
+
+**A caveat on the best run (Opus-high seed 0, 97.8%).** It never saw the data, but it used the loss as a measuring instrument. Its probe passes send one input straight to the logits at a tiny scale (0.1). At that scale the change in loss away from ln 3 is close to a weighted difference of that input's class averages. From those readings it worked out the class averages by hand and wrote a nearest-class-average classifier in pass 29, reaching the same 97.8% the leaky experiment 1 got from the data card. No written rule forbids this: it ran only the forward command and did no gradient code. But it is effectively a hand-computed gradient (a finite-difference probe) of the data statistics. The other rebuilders did something milder: they hill-climbed the weights of a linear model they had built, using the loss.
+
+**Audit.** All 27 transcripts were audited (`runs-blind/*/trial*/audit.txt`) and all 27 runs replay exactly from their weight snapshots. No agent read the data, the source, other runs or any other file. There were four harmless slips:
+- one edit to a mistyped path, which failed;
+- two no-op shell commands (`python - 2>/dev/null; true` and `cd <run> && true`);
+- one forward pass whose output the agent piped to `head -0`, wasting that pass on unchanged weights.
 
 ### Audit of experiment 1
 
@@ -128,5 +143,6 @@ Every experiment-1 transcript was also audited (`runs/*/trial*/audit.txt`). No a
 
 ## Next experiment worth running
 
-More blind trials (seeds 1, 2) and other models or effort levels, to see whether any model beats blind random search when it has nothing but weights and a scalar score.
-Also a held-out test split, so that tuning against the score is measured honestly.
+- A held-out test split, so that tuning against the score is measured honestly. The rebuild strategy fits a linear model on the evaluation set itself.
+- A stricter blind variant that reports only accuracy, not loss. Accuracy is too coarse for the finite-difference measuring trick.
+- A larger budget, or a harder dataset, to see whether the gap between rebuilding and tweaking grows.
